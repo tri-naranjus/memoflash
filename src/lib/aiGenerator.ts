@@ -46,9 +46,15 @@ const PROVIDERS: Record<string, AIProvider> = {
       generationConfig: {
         temperature,
         maxOutputTokens: _maxTokens,
+        responseMimeType: 'application/json',
       },
     }),
-    parseResponse: (data: any) => data.candidates?.[0]?.content?.parts?.[0]?.text || '',
+    parseResponse: (data: any) => {
+      const parts = data.candidates?.[0]?.content?.parts || []
+      // Gemini 2.5 thinking models may include thought parts before the actual response
+      const textPart = parts.find((p: any) => p.text && !p.thought) || parts[parts.length - 1]
+      return textPart?.text || ''
+    },
   },
   openai: {
     name: 'OpenAI',
@@ -181,7 +187,7 @@ ${text}`
   const response = await fetch(provider.getUrl(apiKey), {
     method: 'POST',
     headers: provider.getHeaders(apiKey),
-    body: JSON.stringify(provider.getBody(prompt, 4000, 0.7)),
+    body: JSON.stringify(provider.getBody(prompt, 8000, 0.7)),
   })
 
   if (!response.ok) {
@@ -218,7 +224,7 @@ ${text}`
   const response = await fetch(provider.getUrl(apiKey), {
     method: 'POST',
     headers: provider.getHeaders(apiKey),
-    body: JSON.stringify(provider.getBody(prompt, 4000, 0.7)),
+    body: JSON.stringify(provider.getBody(prompt, 8000, 0.7)),
   })
 
   if (!response.ok) {
@@ -234,11 +240,9 @@ ${text}`
 
 function parseAIResponse(content: string): Partial<Card>[] {
   let jsonStr = content.trim()
-  // Remove markdown code blocks if present
-  if (jsonStr.startsWith('```')) {
-    jsonStr = jsonStr.replace(/^```(?:json)?\s*\n?/, '').replace(/\n?\s*```$/, '')
-  }
-  // Find JSON array in response
+  // Remove markdown code blocks (handle ```json ... ``` or ``` ... ```)
+  jsonStr = jsonStr.replace(/^```(?:json)?\s*\n?/i, '').replace(/\n?\s*```\s*$/i, '')
+  // Find JSON array in response (skip any text before/after)
   const start = jsonStr.indexOf('[')
   const end = jsonStr.lastIndexOf(']')
   if (start !== -1 && end !== -1) {
@@ -246,6 +250,7 @@ function parseAIResponse(content: string): Partial<Card>[] {
   }
 
   try {
+    console.debug('[AI] content length:', jsonStr.length, 'starts:', jsonStr.substring(0, 50))
     const parsed: GeneratedQuestion[] = JSON.parse(jsonStr)
     if (!Array.isArray(parsed)) throw new Error('Not an array')
 
@@ -277,30 +282,24 @@ export async function generateDistractorsForCard(
   const provider = PROVIDERS[providerKey]
   if (!provider) throw new Error(`Proveedor no soportado: ${providerKey}`)
 
-  const prompt = `Eres un experto en evaluación educativa. Dado el siguiente par pregunta-respuesta, genera exactamente 3 respuestas incorrectas MUY CONVINCENTES que parezcan correctas pero tengan un matiz sutil que las hace incorrectas. También genera explicaciones detalladas y una pista.
+  const prompt = `Genera 3 distractores para esta tarjeta de estudio. Sé BREVE en todas las respuestas (máximo 15 palabras cada campo).
 
 PREGUNTA: ${question}
 RESPUESTA CORRECTA: ${correctAnswer}
 
-REGLAS CRÍTICAS para los distractores:
-- Deben ser PLAUSIBLES y del mismo dominio que la respuesta correcta
-- Deben tener un error SUTIL (no obvio): una palabra cambiada, una inversión de concepto, una confusión entre términos similares
-- NO deben ser completamente inventados ni absurdos
-- Deben tener longitud similar a la respuesta correcta
-- El estudiante debe necesitar conocimiento real para descartarlos
+Reglas:
+- Distractores plausibles pero incorrectos, error sutil
+- explanation: 1 frase corta explicando la correcta
+- wrong_explanation_1/2/3: 1 frase corta por qué está mal
+- hint: 1 frase pista sin revelar la respuesta
 
-REGLAS para las explicaciones:
-- "explanation": explica POR QUÉ la respuesta correcta es correcta (2-3 frases)
-- "wrong_explanation_1/2/3": explica POR QUÉ ESA opción específica está mal y qué error conceptual representa (1-2 frases cada una)
-- "hint": pista que ayude sin revelar la respuesta (1 frase)
-
-Responde SOLO con JSON válido, sin texto adicional ni markdown:
+Responde SOLO con este JSON exacto sin texto adicional:
 {"wrong_answer_1":"...","wrong_answer_2":"...","wrong_answer_3":"...","explanation":"...","wrong_explanation_1":"...","wrong_explanation_2":"...","wrong_explanation_3":"...","hint":"..."}`
 
   const response = await fetch(provider.getUrl(apiKey), {
     method: 'POST',
     headers: provider.getHeaders(apiKey),
-    body: JSON.stringify(provider.getBody(prompt, 1000, 0.8)),
+    body: JSON.stringify(provider.getBody(prompt, 3000, 0.8)),
   })
 
   if (!response.ok) {
