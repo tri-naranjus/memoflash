@@ -14,16 +14,16 @@ interface StudySessionProps {
 const MAX_RETRIES = 3
 
 // ── AI Config stored in localStorage (with env var fallback) ──────────────
-const DEFAULT_GROQ_KEY = import.meta.env.VITE_GROQ_API_KEY || ''
+const DEFAULT_GOOGLE_KEY = import.meta.env.VITE_GOOGLE_AI_API_KEY || ''
 
 function getStoredAIConfig(): { provider: AIProviderKey; apiKey: string } {
   try {
     return {
-      provider: (localStorage.getItem('memoflash_ai_provider') as AIProviderKey) || 'groq',
-      apiKey: localStorage.getItem('memoflash_ai_key') || DEFAULT_GROQ_KEY,
+      provider: (localStorage.getItem('memoflash_ai_provider') as AIProviderKey) || 'google',
+      apiKey: localStorage.getItem('memoflash_ai_key') || DEFAULT_GOOGLE_KEY,
     }
   } catch {
-    return { provider: 'groq', apiKey: DEFAULT_GROQ_KEY }
+    return { provider: 'google', apiKey: DEFAULT_GOOGLE_KEY }
   }
 }
 function saveAIConfig(provider: AIProviderKey, apiKey: string) {
@@ -71,8 +71,8 @@ function AIConfigModal({
               API Key{' '}
               <a
                 href={
-                  provider === 'groq'
-                    ? 'https://console.groq.com/keys'
+                  provider === 'google'
+                    ? 'https://aistudio.google.com/apikey'
                     : provider === 'openrouter'
                     ? 'https://openrouter.ai/keys'
                     : 'https://platform.openai.com/api-keys'

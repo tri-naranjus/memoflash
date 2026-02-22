@@ -10,9 +10,9 @@ interface FileImporterProps {
   onClose: () => void
 }
 
-// Usa siempre Groq con la clave del entorno
-const AI_API_KEY = import.meta.env.VITE_GROQ_API_KEY || ''
-const AI_PROVIDER = 'groq' as const
+// Usa siempre Google AI con la clave del entorno
+const AI_API_KEY = import.meta.env.VITE_GOOGLE_AI_API_KEY || ''
+const AI_PROVIDER = 'google' as const
 
 export function FileImporter({ onImport, onClose }: FileImporterProps) {
   const [file, setFile] = useState<File | null>(null)

@@ -26,41 +26,44 @@ interface AIProvider {
   url: string
   model: string
   getHeaders: (apiKey: string) => Record<string, string>
-  getBody: (prompt: string) => object
+  getBody: (prompt: string, maxTokens?: number, temperature?: number) => object
+  getUrl: (apiKey: string) => string
   parseResponse: (data: unknown) => string
 }
 
 // Proveedores de IA gratuitos
 const PROVIDERS: Record<string, AIProvider> = {
-  groq: {
-    name: 'Groq (Gratis)',
-    url: 'https://api.groq.com/openai/v1/chat/completions',
-    model: 'llama-3.3-70b-versatile',
-    getHeaders: (apiKey) => ({
+  google: {
+    name: 'Google AI (Gemini)',
+    url: 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent',
+    model: 'gemini-2.5-flash',
+    getUrl: (apiKey) => `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`,
+    getHeaders: (_apiKey) => ({
       'Content-Type': 'application/json',
-      'Authorization': `Bearer ${apiKey}`,
     }),
-    getBody: (prompt) => ({
-      model: 'llama-3.3-70b-versatile',
-      messages: [{ role: 'user', content: prompt }],
-      temperature: 0.7,
-      max_tokens: 4000,
+    getBody: (prompt, _maxTokens = 4000, temperature = 0.7) => ({
+      contents: [{ parts: [{ text: prompt }] }],
+      generationConfig: {
+        temperature,
+        maxOutputTokens: _maxTokens,
+      },
     }),
-    parseResponse: (data: any) => data.choices?.[0]?.message?.content || '',
+    parseResponse: (data: any) => data.candidates?.[0]?.content?.parts?.[0]?.text || '',
   },
   openai: {
     name: 'OpenAI',
     url: 'https://api.openai.com/v1/chat/completions',
     model: 'gpt-4o-mini',
+    getUrl: (_apiKey) => 'https://api.openai.com/v1/chat/completions',
     getHeaders: (apiKey) => ({
       'Content-Type': 'application/json',
       'Authorization': `Bearer ${apiKey}`,
     }),
-    getBody: (prompt) => ({
+    getBody: (prompt, maxTokens = 4000, temperature = 0.7) => ({
       model: 'gpt-4o-mini',
       messages: [{ role: 'user', content: prompt }],
-      temperature: 0.7,
-      max_tokens: 4000,
+      temperature,
+      max_tokens: maxTokens,
     }),
     parseResponse: (data: any) => data.choices?.[0]?.message?.content || '',
   },
@@ -68,15 +71,16 @@ const PROVIDERS: Record<string, AIProvider> = {
     name: 'OpenRouter (Multi-modelo)',
     url: 'https://openrouter.ai/api/v1/chat/completions',
     model: 'qwen/qwen-2.5-72b-instruct:free',
+    getUrl: (_apiKey) => 'https://openrouter.ai/api/v1/chat/completions',
     getHeaders: (apiKey) => ({
       'Content-Type': 'application/json',
       'Authorization': `Bearer ${apiKey}`,
     }),
-    getBody: (prompt) => ({
+    getBody: (prompt, maxTokens = 4000, temperature = 0.7) => ({
       model: 'qwen/qwen-2.5-72b-instruct:free',
       messages: [{ role: 'user', content: prompt }],
-      temperature: 0.7,
-      max_tokens: 4000,
+      temperature,
+      max_tokens: maxTokens,
     }),
     parseResponse: (data: any) => data.choices?.[0]?.message?.content || '',
   },
@@ -100,7 +104,7 @@ export async function generateQuestionsFromText(
   text: string,
   numQuestions: number,
   apiKey: string,
-  providerKey: AIProviderKey = 'groq',
+  providerKey: AIProviderKey = 'google',
   onProgress?: (msg: string) => void,
 ): Promise<Partial<Card>[]> {
   const provider = PROVIDERS[providerKey]
@@ -133,7 +137,7 @@ export async function generateQuestionsFromText(
 export async function generateDistractorsForAnki(
   text: string,
   apiKey: string,
-  providerKey: AIProviderKey = 'groq',
+  providerKey: AIProviderKey = 'google',
   onProgress?: (msg: string) => void,
 ): Promise<Partial<Card>[]> {
   const provider = PROVIDERS[providerKey]
@@ -174,10 +178,10 @@ FORMATO JSON exacto:
 TEXTO:
 ${text}`
 
-  const response = await fetch(provider.url, {
+  const response = await fetch(provider.getUrl(apiKey), {
     method: 'POST',
     headers: provider.getHeaders(apiKey),
-    body: JSON.stringify(provider.getBody(prompt)),
+    body: JSON.stringify(provider.getBody(prompt, 4000, 0.7)),
   })
 
   if (!response.ok) {
@@ -211,10 +215,10 @@ FORMATO JSON exacto:
 TARJETAS:
 ${text}`
 
-  const response = await fetch(provider.url, {
+  const response = await fetch(provider.getUrl(apiKey), {
     method: 'POST',
     headers: provider.getHeaders(apiKey),
-    body: JSON.stringify(provider.getBody(prompt)),
+    body: JSON.stringify(provider.getBody(prompt, 4000, 0.7)),
   })
 
   if (!response.ok) {
@@ -268,7 +272,7 @@ export async function generateDistractorsForCard(
   question: string,
   correctAnswer: string,
   apiKey: string,
-  providerKey: AIProviderKey = 'groq',
+  providerKey: AIProviderKey = 'google',
 ): Promise<DistractorResult> {
   const provider = PROVIDERS[providerKey]
   if (!provider) throw new Error(`Proveedor no soportado: ${providerKey}`)
@@ -293,14 +297,10 @@ REGLAS para las explicaciones:
 Responde SOLO con JSON válido, sin texto adicional ni markdown:
 {"wrong_answer_1":"...","wrong_answer_2":"...","wrong_answer_3":"...","explanation":"...","wrong_explanation_1":"...","wrong_explanation_2":"...","wrong_explanation_3":"...","hint":"..."}`
 
-  const response = await fetch(provider.url, {
+  const response = await fetch(provider.getUrl(apiKey), {
     method: 'POST',
     headers: provider.getHeaders(apiKey),
-    body: JSON.stringify({
-      ...provider.getBody(prompt),
-      max_tokens: 1000,
-      temperature: 0.8,
-    }),
+    body: JSON.stringify(provider.getBody(prompt, 1000, 0.8)),
   })
 
   if (!response.ok) {
