@@ -17,28 +17,20 @@ const MAX_RETRIES = 3
 const DEFAULT_GOOGLE_KEY = import.meta.env.VITE_GOOGLE_AI_API_KEY || ''
 
 function getStoredAIConfig(): { provider: AIProviderKey; apiKey: string } {
+  // Si hay clave de Google en el entorno, siempre usamos Google
+  // ignorando lo que haya en localStorage de sesiones anteriores
+  if (DEFAULT_GOOGLE_KEY) {
+    return { provider: 'google', apiKey: DEFAULT_GOOGLE_KEY }
+  }
   try {
     const storedProvider = localStorage.getItem('memoflash_ai_provider') as AIProviderKey
     const storedKey = localStorage.getItem('memoflash_ai_key') || ''
-    // Si hay clave de entorno de Google, siempre usamos Google como proveedor por defecto
-    // ignorando lo que haya en localStorage de sesiones anteriores con otros proveedores
-    if (DEFAULT_GOOGLE_KEY) {
-      const provider = storedProvider || 'google'
-      const apiKey = provider === 'google'
-        ? (storedKey || DEFAULT_GOOGLE_KEY)
-        : storedKey || DEFAULT_GOOGLE_KEY
-      // Si el proveedor guardado no tiene clave propia, volvemos a Google
-      if (!storedKey && storedProvider && storedProvider !== 'google') {
-        return { provider: 'google', apiKey: DEFAULT_GOOGLE_KEY }
-      }
-      return { provider, apiKey }
-    }
     return {
       provider: storedProvider || 'google',
-      apiKey: storedKey || DEFAULT_GOOGLE_KEY,
+      apiKey: storedKey,
     }
   } catch {
-    return { provider: 'google', apiKey: DEFAULT_GOOGLE_KEY }
+    return { provider: 'google', apiKey: '' }
   }
 }
 function saveAIConfig(provider: AIProviderKey, apiKey: string) {
