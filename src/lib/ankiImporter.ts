@@ -1,12 +1,13 @@
 import JSZip from 'jszip'
 import initSqlJs from 'sql.js'
+import { decompress } from 'fzstd'
 
 export interface AnkiCard {
   front: string
   back: string
 }
 
-// Singleton to avoid re-initializing SQL.js multiple times
+// Singleton para no re-inicializar sql.js múltiples veces
 let _SQL: ReturnType<typeof initSqlJs> extends Promise<infer T> ? T : never
 
 async function getSQL() {
@@ -19,75 +20,100 @@ async function getSQL() {
 }
 
 /**
- * Parse an Anki .apkg file and extract Q&A pairs
+ * Descomprime datos zstd si el archivo empieza con la magic de zstd (0xFD2FB528)
+ * Los archivos .anki21b en Anki 2.1.50+ están comprimidos con zstd
+ */
+function maybeDecompressZstd(data: Uint8Array): Uint8Array {
+  // Magic bytes de zstd: FD 2F B5 28
+  if (
+    data.length > 4 &&
+    data[0] === 0xfd &&
+    data[1] === 0x2f &&
+    data[2] === 0xb5 &&
+    data[3] === 0x28
+  ) {
+    console.log('[Anki] Detectado formato zstd — descomprimiendo...')
+    return decompress(data)
+  }
+  return data
+}
+
+/**
+ * Parsea un archivo Anki .apkg y extrae pares pregunta/respuesta
  */
 export async function parseAnkiFile(file: File): Promise<AnkiCard[]> {
   const arrayBuffer = await file.arrayBuffer()
   const zip = await JSZip.loadAsync(arrayBuffer)
 
-  // List all files in zip for debugging
   const zipFiles = Object.keys(zip.files)
-  console.log('APKG contents:', zipFiles)
+  console.log('[Anki] Contenido del ZIP:', zipFiles)
 
-  // Try anki21 first (Anki 2.1+), then anki2 (legacy)
-  const dbFileName = zipFiles.find(f => f === 'collection.anki21')
-    || zipFiles.find(f => f === 'collection.anki2')
-    || zipFiles.find(f => f.endsWith('.anki21'))
-    || zipFiles.find(f => f.endsWith('.anki2'))
+  // Prioridad: anki21b (zstd) > anki21 > anki2
+  const dbFileName =
+    zipFiles.find(f => f === 'collection.anki21b') ||
+    zipFiles.find(f => f === 'collection.anki21') ||
+    zipFiles.find(f => f === 'collection.anki2') ||
+    zipFiles.find(f => f.endsWith('.anki21b')) ||
+    zipFiles.find(f => f.endsWith('.anki21')) ||
+    zipFiles.find(f => f.endsWith('.anki2'))
 
   if (!dbFileName) {
-    throw new Error(`No se encontró la base de datos. Archivos en el ZIP: ${zipFiles.join(', ')}`)
+    throw new Error(
+      `No se encontró la base de datos Anki en el archivo.\nArchivos encontrados: ${zipFiles.join(', ')}`
+    )
   }
 
-  console.log('Using DB file:', dbFileName)
+  console.log('[Anki] Usando archivo DB:', dbFileName)
 
   const dbZipFile = zip.file(dbFileName)!
-  const dbData = await dbZipFile.async('arraybuffer')
-  const dbUint8 = new Uint8Array(dbData)
+  const dbRaw = new Uint8Array(await dbZipFile.async('arraybuffer'))
 
-  console.log('DB size:', dbUint8.length, 'bytes')
+  console.log('[Anki] Tamaño raw:', dbRaw.length, 'bytes')
 
-  // Check SQLite magic bytes (first 16 bytes should be "SQLite format 3\0")
-  const magic = new TextDecoder().decode(dbUint8.slice(0, 15))
-  console.log('DB magic:', magic)
+  // Descomprimir si es zstd
+  const dbData = maybeDecompressZstd(dbRaw)
+
+  console.log('[Anki] Tamaño tras descompresión:', dbData.length, 'bytes')
+
+  // Verificar magic bytes de SQLite
+  const magic = new TextDecoder().decode(dbData.slice(0, 15))
+  console.log('[Anki] SQLite magic:', magic)
 
   if (!magic.startsWith('SQLite format 3')) {
-    // File may be zstd-compressed (Anki 2.1.50+)
     throw new Error(
-      'Este archivo usa el formato Anki 2.1.50+ con compresión zstd, que no está soportado todavía. ' +
-      'Por favor, exporta el mazo desde Anki en formato .apkg legacy (Anki 2.1.49 o anterior) o usa un submazo individual.'
+      `El archivo no es una base de datos SQLite válida (magic: "${magic}"). ` +
+      `Formato no reconocido.`
     )
   }
 
   const SQL = await getSQL()
-  const db = new SQL.Database(dbUint8)
+  const db = new SQL.Database(dbData)
 
   let cards: AnkiCard[] = []
   try {
-    // Check tables
     const tables = db.exec("SELECT name FROM sqlite_master WHERE type='table'")
     const tableNames = tables[0]?.values.map((r: unknown[]) => String(r[0])) || []
-    console.log('Tables:', tableNames)
+    console.log('[Anki] Tablas:', tableNames)
 
     if (!tableNames.includes('notes')) {
-      throw new Error(`La base de datos no tiene tabla 'notes'. Tablas encontradas: ${tableNames.join(', ')}`)
+      throw new Error(
+        `La base de datos no tiene la tabla 'notes'.\nTablas encontradas: ${tableNames.join(', ')}`
+      )
     }
 
     const countResult = db.exec('SELECT COUNT(*) FROM notes')
     const noteCount = Number(countResult[0]?.values[0]?.[0] || 0)
-    console.log('Note count:', noteCount)
+    console.log('[Anki] Notas totales:', noteCount)
 
     if (noteCount === 0) {
       throw new Error('El archivo .apkg no contiene notas')
     }
 
     const results = db.exec('SELECT flds FROM notes')
-
     for (const row of results[0].values) {
       const flds = String(row[0])
-      // Anki separates fields with Unit Separator \x1f (char 31)
+      // Anki separa campos con el carácter separador de unidad \x1f (char 31)
       const parts = flds.split('\x1f')
-
       if (parts.length >= 2) {
         const front = stripHtml(parts[0]).trim()
         const back = stripHtml(parts[1]).trim()
@@ -97,13 +123,13 @@ export async function parseAnkiFile(file: File): Promise<AnkiCard[]> {
       }
     }
 
-    console.log('Parsed cards:', cards.length)
+    console.log('[Anki] Tarjetas parseadas:', cards.length)
   } finally {
     db.close()
   }
 
   if (cards.length === 0) {
-    throw new Error('No se encontraron tarjetas válidas con pregunta y respuesta')
+    throw new Error('No se encontraron tarjetas válidas con pregunta y respuesta en el archivo')
   }
 
   return cards
@@ -112,9 +138,9 @@ export async function parseAnkiFile(file: File): Promise<AnkiCard[]> {
 function stripHtml(input: string): string {
   if (!input) return ''
   return input
-    .replace(/<br\s*\/?>/gi, ' ')
-    .replace(/<div>/gi, ' ')
-    .replace(/<\/div>/gi, ' ')
+    .replace(/<br\s*\/?>/gi, '\n')
+    .replace(/<div>/gi, '\n')
+    .replace(/<\/div>/gi, '')
     .replace(/<[^>]*>/g, '')
     .replace(/&nbsp;/g, ' ')
     .replace(/&amp;/g, '&')
@@ -127,7 +153,7 @@ function stripHtml(input: string): string {
 }
 
 export function formatAnkiCardsAsText(cards: AnkiCard[]): string {
-  return cards.map((card, i) =>
-    `Tarjeta ${i + 1}:\nPregunta: ${card.front}\nRespuesta: ${card.back}`
-  ).join('\n\n')
+  return cards
+    .map((card, i) => `Tarjeta ${i + 1}:\nPregunta: ${card.front}\nRespuesta: ${card.back}`)
+    .join('\n\n')
 }
